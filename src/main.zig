@@ -132,8 +132,13 @@ fn inputTarget(fg: HWND) HWND {
 }
 
 // The layout after the target thread's current one, as the system hotkey would
-// pick. Applications may read lParam as the requested HKL, so it must be valid.
+// pick. WinForms reads lParam as the requested HKL and throws on null.
+// A console window reports its client's thread rather than conhost's, whose
+// layout is stale, so consoles get null and switch to the next layout themselves.
 fn nextLayout(target: HWND) ?*anyopaque {
+    var cls: [32]u8 = undefined;
+    if (std.mem.eql(u8, className(target, &cls), "ConsoleWindowClass")) return null;
+
     var list: [16]?*anyopaque = undefined;
     const n: usize = @intCast(@max(GetKeyboardLayoutList(list.len, &list), 0));
     if (n == 0) return null;
