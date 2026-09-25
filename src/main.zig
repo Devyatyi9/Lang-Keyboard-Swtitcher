@@ -22,6 +22,7 @@ extern "user32" fn PostMessageW(hWnd: HWND, Msg: u32, wParam: WPARAM, lParam: LP
 extern "user32" fn SetTimer(hWnd: HWND, nIDEvent: usize, uElapse: u32, lpTimerFunc: ?*anyopaque) callconv(.winapi) usize;
 extern "user32" fn KillTimer(hWnd: HWND, uIDEvent: usize) callconv(.winapi) BOOL;
 extern "user32" fn GetKeyboardLayout(idThread: DWORD) callconv(.winapi) ?*anyopaque;
+extern "user32" fn GetKeyboardLayoutList(nBuff: i32, lpList: ?[*]?*anyopaque) callconv(.winapi) i32;
 extern "user32" fn GetForegroundWindow() callconv(.winapi) HWND;
 extern "user32" fn GetWindowThreadProcessId(hWnd: HWND, lpdwProcessId: ?*DWORD) callconv(.winapi) DWORD;
 extern "user32" fn GetGUIThreadInfo(idThread: DWORD, pgui: *GUITHREADINFO) callconv(.winapi) BOOL;
@@ -130,22 +131,37 @@ fn inputTarget(fg: HWND) HWND {
     return fg;
 }
 
+// The layout after the target thread's current one, as the system hotkey would
+// pick. Applications may read lParam as the requested HKL, so it must be valid.
+fn nextLayout(target: HWND) ?*anyopaque {
+    var list: [16]?*anyopaque = undefined;
+    const n: usize = @intCast(@max(GetKeyboardLayoutList(list.len, &list), 0));
+    if (n == 0) return null;
+    const current = GetKeyboardLayout(GetWindowThreadProcessId(target, null));
+    for (list[0..n], 0..) |hkl, i| {
+        if (hkl == current) return list[(i + 1) % n];
+    }
+    return list[0];
+}
+
 fn switchLayout(key_time: DWORD) void {
     const fg = GetForegroundWindow() orelse {
         log("caps: no foreground window", .{});
         return;
     };
     const target = inputTarget(fg);
-    const ok = PostMessageW(target, WM_INPUTLANGCHANGEREQUEST, INPUTLANGCHANGE_FORWARD, 0) != 0;
+    const next = nextLayout(target);
+    const ok = PostMessageW(target, WM_INPUTLANGCHANGEREQUEST, INPUTLANGCHANGE_FORWARD, @bitCast(@intFromPtr(next))) != 0;
 
     if (log_enabled) {
         var fg_buf: [64]u8 = undefined;
         var t_buf: [64]u8 = undefined;
-        log("caps: fg={s} {x} target={s} {x} post={s} err={d} delay={d}ms", .{
+        log("caps: fg={s} {x} target={s} {x} next={x} post={s} err={d} delay={d}ms", .{
             className(fg, &fg_buf),
             @intFromPtr(fg),
             className(target, &t_buf),
             @intFromPtr(target),
+            @intFromPtr(next),
             if (ok) "ok" else "FAIL",
             if (ok) 0 else GetLastError(),
             GetTickCount() -% key_time,
